@@ -1,12 +1,17 @@
 'use strict';
 const $=id=>document.getElementById(id);
 const STORAGE='vincent-web-chat-v1';
+let ownerToken=localStorage.getItem('vincent-owner-key')||'';
+const pairing=new URLSearchParams(location.hash.slice(1)).get('owner');
+if(pairing){ownerToken=pairing;localStorage.setItem('vincent-owner-key',ownerToken);window.history.replaceState(null,'',location.pathname);}
+let archiveBefore=null,archiveLoading=false;
+const storageKey=()=>ownerToken?'vincent-owner-history-cache':STORAGE;
 const DISCOVERY='https://raw.githubusercontent.com/Johnmelogay/vincent-local-companion-web/main/runtime.json';
 let api='',socket=null,busy=false,attachments=[],history=[],mic=null,capture=null,processor=null;
 let speaking=false,speech=[],silence=0,voiced=0,barge=0,preRoll=[],audioContext=null,playAt=0,sources=new Set(),decode=Promise.resolve(),audioEpoch=0;
-try{history=JSON.parse(localStorage.getItem(STORAGE)||'[]').slice(-20);}catch{history=[];}
+try{history=JSON.parse(localStorage.getItem(storageKey())||'[]').slice(ownerToken?-200:-20);}catch{history=[];}
 function activity(text){$('activity-text').textContent=text;$('stop').hidden=!busy;}
-function save(){try{localStorage.setItem(STORAGE,JSON.stringify(history.slice(-20)));}catch{}}
+function save(){try{localStorage.setItem(storageKey(),JSON.stringify(history.slice(ownerToken?-200:-20)));}catch{}}
 function renderMessage(role,text){
  $('welcome')?.remove();const row=document.createElement('article');row.className='message '+role;
  if(role==='assistant'){const label=document.createElement('div');label.className='message-label';label.textContent='VINCENT';row.append(label);}
@@ -20,9 +25,34 @@ async function discover(){
  const status=await fetch(api+'/status',{signal:AbortSignal.timeout(6000)}).then(r=>r.json());if(!status.online)throw Error('Mac offline or preparing');
  $('connection-label').textContent=status.busy?'Mac online · answering':'Mac connected';$('connection-dot').classList.add('online');$('api-address').value=api+'/v1';
  if(!busy&&$('activity-text').textContent.startsWith('Waiting'))activity(mic?'Listening…':'');
+ if(ownerToken&&!busy)await syncOwnerHistory();
  }catch(error){$('connection-label').textContent='Mac offline or preparing';$('connection-dot').classList.remove('online');if(!busy)activity('Waiting for your Mac to come online…');}
 }
 discover();setInterval(discover,30000);
+async function syncOwnerHistory(older=false){
+ if(!ownerToken||!api||archiveLoading||busy)return;
+ archiveLoading=true;
+ try{
+  const path=api+'/api/history?limit=200'+(older&&archiveBefore?'&before='+archiveBefore:'');
+  const response=await fetch(path,{headers:{Authorization:'Bearer '+ownerToken},cache:'no-store'});
+  const data=await response.json();if(!response.ok)throw Error(data.detail||'Could not sync personal history.');
+  const messages=data.messages.map(m=>({role:m.role,content:m.content}));
+  history=older?[...messages,...history]:messages;
+  if(data.messages.length)archiveBefore=data.messages[0].id;
+  $('messages').replaceChildren();history.forEach(m=>renderMessage(m.role,m.content));save();
+  $('older-history').hidden=!data.has_more;
+  $('personal-history-status').textContent=`Personal history connected · ${data.total} messages saved on your Mac. Desktop and web share this history.`;
+  $('export-history').hidden=false;$('disconnect-history').hidden=false;
+  $('composer-note').textContent='Personal history synced with your Mac · Complete transcript retained locally · Recent and relevant context used for replies';
+  $('new-chat').title='Refresh shared history';const label=$('new-chat').querySelector('span');if(label)label.textContent='Refresh history';
+ }catch(error){activity(error.message);}finally{archiveLoading=false;}
+}
+$('older-history').onclick=()=>syncOwnerHistory(true);
+$('export-history').onclick=async()=>{
+ try{const response=await fetch(api+'/api/history/export',{headers:{Authorization:'Bearer '+ownerToken}});if(!response.ok)throw Error('Could not export history.');const blob=await response.blob();const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download='vincent-history.json';link.click();setTimeout(()=>URL.revokeObjectURL(link.href),1000);}catch(error){activity(error.message);}
+};
+$('disconnect-history').onclick=()=>{localStorage.removeItem('vincent-owner-key');localStorage.removeItem('vincent-owner-history-cache');location.reload();};
+setInterval(()=>{if(ownerToken&&!busy)syncOwnerHistory();},15000);
 function stopAudio(){audioEpoch++;for(const source of sources){try{source.stop();}catch{}}sources.clear();playAt=0;decode=Promise.resolve();}
 function stop(){if(socket){socket.close();socket=null;}stopAudio();busy=false;activity(mic?'Listening…':'');}
 function audio(data){const epoch=audioEpoch;decode=decode.then(async()=>{if(epoch!==audioEpoch)return;if(!audioContext)audioContext=new AudioContext({sampleRate:24000});await audioContext.resume();const bytes=Uint8Array.from(atob(data),c=>c.charCodeAt(0));const buffer=await audioContext.decodeAudioData(bytes.buffer);if(epoch!==audioEpoch)return;const source=audioContext.createBufferSource();source.buffer=buffer;source.connect(audioContext.destination);source.onended=()=>{sources.delete(source);if(!sources.size&&!busy)activity(mic?'Listening…':'');};playAt=Math.max(playAt,audioContext.currentTime+.18);sources.add(source);source.start(playAt);playAt+=buffer.duration;}).catch(()=>activity('Audio could not play. Tap Voice replies and try again.'));}
@@ -37,7 +67,7 @@ function send(message,audioData=null){
  if(message){history.push({role:'user',content:message});renderMessage('user',message);userAdded=true;save();}
  busy=true;activity(audioData?'Transcribing…':$('reasoning').checked?'Checking the question carefully…':'Thinking…');
  const current=new WebSocket(api.replace(/^http/,'ws')+'/ws');socket=current;
- current.onopen=()=>current.send(JSON.stringify({message:message||'',history:prior,context:documentContext(message||'Summarize the document'),reasoning:$('reasoning').checked,voice:$('speak').checked,audio_base64:audioData}));
+ current.onopen=()=>current.send(JSON.stringify({message:message||'',history:prior,context:documentContext(message||'Summarize the document'),reasoning:$('reasoning').checked,voice:$('speak').checked,audio_base64:audioData,owner_token:ownerToken||undefined}));
  current.onmessage=event=>{if(socket!==current)return;const msg=JSON.parse(event.data);
  if(msg.type==='stage')activity({transcribing:'Transcribing…',thinking:$('reasoning').checked?'Checking the question carefully…':'Thinking…',speaking:'Preparing voice…'}[msg.stage]||'Working…');
  if(msg.type==='transcript'&&!userAdded&&msg.text){history.push({role:'user',content:msg.text});renderMessage('user',msg.text);userAdded=true;save();}
@@ -53,7 +83,7 @@ $('composer').onsubmit=event=>{event.preventDefault();const text=$('message').va
 $('message').oninput=()=>{$('message').style.height='auto';$('message').style.height=Math.min(200,$('message').scrollHeight)+'px';};
 $('message').onkeydown=event=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();$('composer').requestSubmit();}};
 $('stop').onclick=stop;
-$('new-chat').onclick=()=>{stop();history=[];save();location.reload();};
+$('new-chat').onclick=()=>{if(ownerToken){stop();syncOwnerHistory();return;}stop();history=[];save();location.reload();};
 document.addEventListener('keydown',event=>{if((event.metaKey||event.ctrlKey)&&event.key==='k'){event.preventDefault();$('new-chat').click();}});
 document.querySelectorAll('[data-prompt]').forEach(button=>button.onclick=()=>send(button.dataset.prompt));
 $('api-info').onclick=()=>$('connection-dialog').showModal();$('close-dialog').onclick=()=>$('connection-dialog').close();

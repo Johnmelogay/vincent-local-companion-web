@@ -19,6 +19,7 @@ async function discover(){
  try{if(location.hostname==='127.0.0.1'||location.hostname==='localhost'||location.hostname.endsWith('.trycloudflare.com'))api=location.origin;else{const r=await fetch(DISCOVERY+'?t='+Date.now(),{cache:'no-store'});if(!r.ok)throw Error('Waiting for the Mac');const d=await r.json();if(!/^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/.test(d.api))throw Error('Waiting for the Mac');api=d.api;}
  const status=await fetch(api+'/status',{signal:AbortSignal.timeout(6000)}).then(r=>r.json());if(!status.online)throw Error('Mac offline or preparing');
  $('connection-label').textContent=status.busy?'Mac online · answering':'Mac connected';$('connection-dot').classList.add('online');$('api-address').value=api+'/v1';
+ if(!busy&&$('activity-text').textContent.startsWith('Waiting'))activity(mic?'Listening…':'');
  }catch(error){$('connection-label').textContent='Mac offline or preparing';$('connection-dot').classList.remove('online');if(!busy)activity('Waiting for your Mac to come online…');}
 }
 discover();setInterval(discover,30000);
@@ -56,6 +57,7 @@ $('new-chat').onclick=()=>{stop();history=[];save();location.reload();};
 document.addEventListener('keydown',event=>{if((event.metaKey||event.ctrlKey)&&event.key==='k'){event.preventDefault();$('new-chat').click();}});
 document.querySelectorAll('[data-prompt]').forEach(button=>button.onclick=()=>send(button.dataset.prompt));
 $('api-info').onclick=()=>$('connection-dialog').showModal();$('close-dialog').onclick=()=>$('connection-dialog').close();
+$('model-label').onclick=()=>$('connection-dialog').showModal();
 $('copy-api').onclick=()=>navigator.clipboard.writeText($('api-address').value).then(()=>$('copy-api').textContent='Copied');
 $('attach').onclick=()=>$('file').click();
 if($('suggest-upload'))$('suggest-upload').onclick=()=>$('file').click();

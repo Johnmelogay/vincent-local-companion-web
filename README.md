@@ -20,6 +20,9 @@ temporary HTTPS tunnel changes. Quick Tunnels have no uptime guarantee.
 
 Anyone with the link can use the isolated public interface. It has no access to
 the owner's private desktop conversation, memory, settings or terminal tools.
+The owner can separately connect a browser using a private pairing link from the
+desktop app. Paired owner sessions share the complete local history archive and
+can export it. The private pairing key is never published to this repository.
 Conversation text is stored in the visitor's browser. Uploaded files are extracted
 on the Mac; document excerpts are passed to the local model for answers. Requests
 travel through Cloudflare's HTTPS tunnel. There is no external model API.

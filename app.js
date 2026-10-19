@@ -23,11 +23,15 @@ $('save-reasoning-default').onclick=()=>{localStorage.setItem('vincent-reasoning
 if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
 window.addEventListener('offline',()=>activity('Offline · saved chats are available; reconnect to reach your Mac.'));
 function save(){try{localStorage.setItem(storageKey(),JSON.stringify(history.slice(ownerToken?-200:-20)));}catch{}}
+let liveReply=null;
+// Minimal markdown built from DOM nodes, so model text can never inject HTML.
+function renderInline(text,parent){let index=0;for(const match of text.matchAll(/(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\s][^*\n]*\*)/g)){if(match.index>index)parent.append(text.slice(index,match.index));const token=match[0];const node=document.createElement(token.startsWith('`')?'code':token.startsWith('**')?'strong':'em');node.textContent=token.startsWith('**')?token.slice(2,-2):token.slice(1,-1);parent.append(node);index=match.index+token.length;}if(index<text.length)parent.append(text.slice(index));}
+function renderProse(text){const block=document.createElement('div');block.className='message-body prose';let list=null;for(const line of text.replace(/^\n+|\n+$/g,'').split('\n')){const bullet=line.match(/^\s*[-*•]\s+(.*)$/),numbered=line.match(/^\s*(\d+)[.)]\s+(.*)$/);if(bullet||numbered){const kind=bullet?'ul':'ol';if(!list||list.tagName.toLowerCase()!==kind){list=document.createElement(kind);block.append(list);}const item=document.createElement('li');renderInline(bullet?bullet[1]:numbered[2],item);list.append(item);continue;}list=null;if(!line.trim())continue;const heading=line.match(/^#{1,4}\s+(.*)$/);const paragraph=document.createElement(heading?'strong':'p');renderInline(heading?heading[1]:line,paragraph);block.append(paragraph);}return block;}
 function renderMessage(role,text,autoscroll=true){
  $('welcome')?.remove();const row=document.createElement('article');row.className='message '+role;
  if(role==='assistant'){const label=document.createElement('div');label.className='message-label';label.textContent='VINCENT';const portrait=document.createElement('img');portrait.src='assets/vincent-character.webp';portrait.alt='';portrait.className='message-portrait';label.prepend(portrait);row.append(label);}
  const chunks=text.split(/(```[\s\S]*?(?:```|$))/g);
- for(const chunk of chunks){if(!chunk)continue;if(chunk.startsWith('```')){const pre=document.createElement('pre');const content=chunk.replace(/^```[^\n]*\n?/,'').replace(/```$/,'');const copy=document.createElement('button');copy.className='copy-code';copy.textContent='Copy code';copy.onclick=()=>navigator.clipboard.writeText(content).then(()=>copy.textContent='Copied');pre.append(copy,document.createTextNode(content));row.append(pre);}else{const body=document.createElement('div');body.className='message-body';body.textContent=chunk;row.append(body);}}
+ for(const chunk of chunks){if(!chunk)continue;if(chunk.startsWith('```')){const pre=document.createElement('pre');const content=chunk.replace(/^```[^\n]*\n?/,'').replace(/```$/,'');const copy=document.createElement('button');copy.className='copy-code';copy.textContent='Copy code';copy.onclick=()=>navigator.clipboard.writeText(content).then(()=>copy.textContent='Copied');pre.append(copy,document.createTextNode(content));row.append(pre);}else if(role==='assistant'){row.append(renderProse(chunk));}else{const body=document.createElement('div');body.className='message-body';body.textContent=chunk;row.append(body);}}
  $('messages').append(row);if(autoscroll)$('messages').scrollTop=$('messages').scrollHeight;return row;
 }
 history.forEach(m=>renderMessage(m.role,m.content));
@@ -93,7 +97,8 @@ function send(message,audioData=null){
  if(msg.type==='progress')showProgress(msg.message||msg.stage);
  if(msg.type==='agent_actions')renderActions(msg.actions||[]);
  if(msg.type==='transcript'&&!userAdded&&msg.text){history.push({role:'user',content:msg.text});renderMessage('user',msg.text);userAdded=true;save();}
- if(msg.type==='text'){history.push({role:'assistant',content:msg.text});renderMessage('assistant',msg.text);save();activity($('speak').checked?'Preparing voice…':'');}
+ if(msg.type==='delta'&&msg.text){liveReply?.remove();liveReply=renderMessage('assistant',msg.text);activity(sources.size?'Speaking · you can interrupt':'Answering…');}
+ if(msg.type==='text'){liveReply?.remove();liveReply=null;history.push({role:'assistant',content:msg.text});renderMessage('assistant',msg.text);save();activity(sources.size?'Speaking · you can interrupt':$('speak').checked?'Preparing voice…':'');}
  if(msg.type==='audio'){activity('Speaking · you can interrupt');audio(msg.audio_base64);}
  if(msg.type==='done'){done=true;busy=false;activity(sources.size?'Speaking…':mic?'Listening…':'');}
  if(msg.type==='error'){done=true;busy=false;activity(msg.message||'The request could not finish.');}

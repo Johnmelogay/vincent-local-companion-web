@@ -57,7 +57,7 @@ async function syncOwnerHistory(older=false){
    feed.scrollTop=older?top+feed.scrollHeight-height:(nearBottom?feed.scrollHeight:top);
   }
   history=next;if(data.messages.length)archiveBefore=Math.min(archiveBefore||Infinity,data.messages[0].id);save();
-  $('older-history').hidden=!data.has_more;
+  $('older-history').hidden=!data.has_more||archiveBefore===1;
   $('personal-history-status').textContent=`Personal history connected · ${data.total} messages saved on your Mac. Desktop and web share this history.`;
   $('export-history').hidden=false;$('disconnect-history').hidden=false;
   $('composer-note').textContent='Personal history synced with your Mac · Complete transcript retained locally · Recent and relevant context used for replies';
@@ -101,7 +101,7 @@ function send(message,audioData=null){
  current.onerror=()=>{if(socket===current){busy=false;activity('Connection interrupted. Check that your Mac is online.');}};
  current.onclose=()=>{if(socket===current){socket=null;busy=false;if(!done)activity('Connection closed. You can try again.');else activity(sources.size?'Speaking…':mic?'Listening…':'');}};
 }
-let taskCursor=0,taskPanel=null;
+let taskCursor=0,taskPanel=null,taskEventsHydrated=false;
 function showProgress(text){
  if(!taskPanel){taskPanel=document.createElement('details');taskPanel.className='message assistant task-activity';taskPanel.open=true;const title=document.createElement('summary');title.textContent='Activity · plans, actions, checks';taskPanel.append(title);$('messages').append(taskPanel);}
  const line=document.createElement('p');line.textContent=text;taskPanel.append(line);while(taskPanel.children.length>60)taskPanel.children[1].remove();
@@ -113,7 +113,7 @@ function renderActions(actions){
  const decide=async(approve,approveTask=false)=>{yes.disabled=no.disabled=automatic.disabled=true;taskRunning=approve;activity(approve?'Running and checking…':'Cancelling…');status.textContent=approve?'Running and checking…':'Cancelling…';try{const response=await fetch(api+'/api/agent/actions/'+encodeURIComponent(action.id),{method:'POST',headers:{Authorization:'Bearer '+ownerToken,'Content-Type':'application/json'},body:JSON.stringify({approve,approve_task:approveTask})});const result=await response.json();if(!response.ok){if(response.status===409||result.detail?.includes('displayed order'))yes.disabled=no.disabled=automatic.disabled=false;throw Error(result.detail||'Action failed.');}status.textContent=JSON.stringify(result,null,2);taskReviewOpen=result.task_state==='awaiting_approval';if(result.actions?.length)renderActions(result.actions);}catch(error){status.textContent=error.message;}finally{taskRunning=false;activity(status.textContent.includes('failed')?'Task needs attention.':'Review task results in Activity.');}};
  yes.onclick=()=>decide(true);no.onclick=()=>decide(false);automatic.onclick=()=>decide(true,true);card.append(title,preview,yes,no,automatic,status);$('messages').append(card);}
 }
-setInterval(async()=>{if(!ownerToken||!api||document.hidden)return;try{const response=await fetch(api+'/api/agent/events?after='+taskCursor,{headers:{Authorization:'Bearer '+ownerToken}});if(!response.ok)return;const data=await response.json();for(const event of data.events){taskCursor=Math.max(taskCursor,event.id);showProgress(event.stage+' · '+(event.detail.message||JSON.stringify(event.detail.result||event.detail)));if(event.stage==='review')activity('Waiting for your review below');else if(['complete','failed','cancelled','paused','interrupted'].includes(event.stage))activity(event.detail.message);else activity(event.detail.message||'Working on your task…');}}catch{}},2000);
+setInterval(async()=>{if(!ownerToken||!api||document.hidden)return;try{const response=await fetch(api+'/api/agent/events?after='+taskCursor,{headers:{Authorization:'Bearer '+ownerToken}});if(!response.ok)return;const data=await response.json();if(!taskEventsHydrated){taskEventsHydrated=true;const active=data.tasks?.[0]&&['planning','running','awaiting_approval'].includes(data.tasks[0].state);if(!active){taskCursor=Math.max(0,...data.events.map(event=>event.id));return;}}for(const event of data.events){taskCursor=Math.max(taskCursor,event.id);showProgress(event.stage+' · '+(window.VincentActivity?.describe(event)||event.stage));if(event.stage==='review')activity('Waiting for your review below');else if(['complete','failed','cancelled','paused','interrupted'].includes(event.stage))activity(event.detail.message);else activity(event.detail.message||'Working on your task…');}}catch{}},2000);
 
 $('composer').onsubmit=event=>{event.preventDefault();const text=$('message').value.trim();if(!text)return;$('message').value='';$('message').style.height='auto';send(text);};
 $('message').oninput=()=>{$('message').style.height='auto';$('message').style.height=Math.min(200,$('message').scrollHeight)+'px';};

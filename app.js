@@ -11,16 +11,24 @@ let api='',socket=null,busy=false,attachments=[],history=[],mic=null,capture=nul
 let speaking=false,speech=[],silence=0,voiced=0,barge=0,preRoll=[],audioContext=null,playAt=0,sources=new Set(),decode=Promise.resolve(),audioEpoch=0;
 try{history=JSON.parse(localStorage.getItem(storageKey())||'[]').slice(ownerToken?-200:-20);}catch{history=[];}
 let activityStarted=0;
-function activity(text){const active=busy||taskRunning;$('activity-text').textContent=text;$('stop').hidden=!active;$('activity').dataset.busy=String(active);if(active&&!activityStarted)activityStarted=Date.now();if(!active)activityStarted=0;}
+function activity(text){document.body.dataset.vincentState=/speaking/i.test(text)?'speaking':(busy||taskRunning?'thinking':'ready');const active=busy||taskRunning;$('activity-text').textContent=text;$('stop').hidden=!active;$('activity').dataset.busy=String(active);if(active&&!activityStarted)activityStarted=Date.now();if(!active)activityStarted=0;}
 const elapsedLabel=document.createElement('small');elapsedLabel.id='task-elapsed';$('activity').append(elapsedLabel);
 setInterval(()=>{elapsedLabel.textContent=activityStarted?Math.floor((Date.now()-activityStarted)/1000)+'s elapsed':'';},1000);
+const EFFORT_LEVELS=['fast','default','careful','deep'];
+function reasoningLevel(){return EFFORT_LEVELS[Number($('reasoning').value)]||'default';}
+$('reasoning').value=String(Math.max(0,EFFORT_LEVELS.indexOf(localStorage.getItem('vincent-reasoning-default')||'default')));
+function updateEffortLabel(){$('reasoning-value').textContent=reasoningLevel().replace(/^./,letter=>letter.toUpperCase());}
+$('reasoning').oninput=updateEffortLabel;updateEffortLabel();
+$('save-reasoning-default').onclick=()=>{localStorage.setItem('vincent-reasoning-default',reasoningLevel());activity('Default saved: '+reasoningLevel());};
+if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+window.addEventListener('offline',()=>activity('Offline · saved chats are available; reconnect to reach your Mac.'));
 function save(){try{localStorage.setItem(storageKey(),JSON.stringify(history.slice(ownerToken?-200:-20)));}catch{}}
-function renderMessage(role,text){
+function renderMessage(role,text,autoscroll=true){
  $('welcome')?.remove();const row=document.createElement('article');row.className='message '+role;
- if(role==='assistant'){const label=document.createElement('div');label.className='message-label';label.textContent='VINCENT';row.append(label);}
+ if(role==='assistant'){const label=document.createElement('div');label.className='message-label';label.textContent='VINCENT';const portrait=document.createElement('img');portrait.src='assets/vincent-character.webp';portrait.alt='';portrait.className='message-portrait';label.prepend(portrait);row.append(label);}
  const chunks=text.split(/(```[\s\S]*?(?:```|$))/g);
  for(const chunk of chunks){if(!chunk)continue;if(chunk.startsWith('```')){const pre=document.createElement('pre');const content=chunk.replace(/^```[^\n]*\n?/,'').replace(/```$/,'');const copy=document.createElement('button');copy.className='copy-code';copy.textContent='Copy code';copy.onclick=()=>navigator.clipboard.writeText(content).then(()=>copy.textContent='Copied');pre.append(copy,document.createTextNode(content));row.append(pre);}else{const body=document.createElement('div');body.className='message-body';body.textContent=chunk;row.append(body);}}
- $('messages').append(row);$('messages').scrollTop=$('messages').scrollHeight;return row;
+ $('messages').append(row);if(autoscroll)$('messages').scrollTop=$('messages').scrollHeight;return row;
 }
 history.forEach(m=>renderMessage(m.role,m.content));
 async function discover(){
@@ -39,10 +47,16 @@ async function syncOwnerHistory(older=false){
   const path=api+'/api/history?limit=200'+(older&&archiveBefore?'&before='+archiveBefore:'');
   const response=await fetch(path,{headers:{Authorization:'Bearer '+ownerToken},cache:'no-store'});
   const data=await response.json();if(!response.ok)throw Error(data.detail||'Could not sync personal history.');
-  const messages=data.messages.map(m=>({role:m.role,content:m.content}));
-  history=older?[...messages,...history]:messages;
-  if(data.messages.length)archiveBefore=data.messages[0].id;
-  $('messages').replaceChildren();history.forEach(m=>renderMessage(m.role,m.content));if(taskPanel)$('messages').append(taskPanel);save();
+  if(busy||taskRunning||taskReviewOpen)return;
+  const messages=data.messages.map(m=>({id:m.id,role:m.role,content:m.content}));
+  const previous=history,feed=$('messages'),top=feed.scrollTop,height=feed.scrollHeight,nearBottom=height-top-feed.clientHeight<90;
+  const next=VincentHistory.reconcile(previous,messages,data.total);
+  if(!VincentHistory.unchanged(previous,next)){
+   if(VincentHistory.appends(previous,next)){for(const item of next.slice(previous.length))renderMessage(item.role,item.content,false);}
+   else{feed.replaceChildren();next.forEach(item=>renderMessage(item.role,item.content,false));if(taskPanel)feed.append(taskPanel);}
+   feed.scrollTop=older?top+feed.scrollHeight-height:(nearBottom?feed.scrollHeight:top);
+  }
+  history=next;if(data.messages.length)archiveBefore=Math.min(archiveBefore||Infinity,data.messages[0].id);save();
   $('older-history').hidden=!data.has_more;
   $('personal-history-status').textContent=`Personal history connected · ${data.total} messages saved on your Mac. Desktop and web share this history.`;
   $('export-history').hidden=false;$('disconnect-history').hidden=false;
@@ -55,6 +69,9 @@ $('export-history').onclick=async()=>{
  try{const response=await fetch(api+'/api/history/export',{headers:{Authorization:'Bearer '+ownerToken}});if(!response.ok)throw Error('Could not export history.');const blob=await response.blob();const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download='vincent-history.json';link.click();setTimeout(()=>URL.revokeObjectURL(link.href),1000);}catch(error){activity(error.message);}
 };
 $('disconnect-history').onclick=()=>{localStorage.removeItem('vincent-owner-key');localStorage.removeItem('vincent-owner-history-cache');location.reload();};
+$('connect-personal').onclick=async()=>{
+ try{const raw=$('personal-link').value.trim();const link=new URL(raw);const token=new URLSearchParams(link.hash.slice(1)).get('owner');if(link.hostname!=='johnmelogay.github.io'||link.pathname!=='/vincent-local-companion-web/'||!token||!/^[A-Za-z0-9_-]{64}$/.test(token))throw Error('Paste the private connection link copied from Vincent on your Mac.');if(!api)throw Error('Wait for your Mac to connect first.');const response=await fetch(api+'/api/history?limit=1',{headers:{Authorization:'Bearer '+token}});if(!response.ok)throw Error('The connection link could not be verified.');ownerToken=token;localStorage.setItem('vincent-owner-key',token);$('personal-link').value='';history=[];archiveBefore=null;await syncOwnerHistory();$('personal-history-status').textContent='Connected to your personal Vincent. Your key stays in this app on this device.';}catch(error){$('personal-history-status').textContent=error.message;}
+};
 setInterval(()=>{if(ownerToken&&!busy)syncOwnerHistory();},15000);
 function stopAudio(){audioEpoch++;for(const source of sources){try{source.stop();}catch{}}sources.clear();playAt=0;decode=Promise.resolve();}
 function stop(){if(socket){socket.close();socket=null;}stopAudio();busy=false;if((taskRunning||taskReviewOpen)&&ownerToken&&api)fetch(api+'/api/agent/stop',{method:'POST',headers:{Authorization:'Bearer '+ownerToken}}).catch(()=>{});taskRunning=false;taskReviewOpen=false;activity(mic?'Listening…':'');}
@@ -68,11 +85,11 @@ function send(message,audioData=null){
  if(!api){activity('Your Mac is not connected yet.');return;}if(busy)stop();
  const prior=history.slice(-12);let userAdded=false,done=false;
  if(message){history.push({role:'user',content:message});renderMessage('user',message);userAdded=true;save();}
- busy=true;activity(audioData?'Transcribing…':$('reasoning').checked?'Checking the question carefully…':'Thinking…');
+ busy=true;activity(audioData?'Transcribing…':Number($('reasoning').value)>=2?'Checking the question carefully…':'Thinking…');
  const current=new WebSocket(api.replace(/^http/,'ws')+'/ws');socket=current;
- current.onopen=()=>current.send(JSON.stringify({message:message||'',history:prior,context:documentContext(message||'Summarize the document'),reasoning:$('reasoning').checked,voice:$('speak').checked,audio_base64:audioData,owner_token:ownerToken||undefined}));
+ current.onopen=()=>current.send(JSON.stringify({message:message||'',history:prior,context:documentContext(message||'Summarize the document'),reasoning_level:reasoningLevel(),voice:$('speak').checked,audio_base64:audioData,owner_token:ownerToken||undefined}));
  current.onmessage=event=>{if(socket!==current)return;const msg=JSON.parse(event.data);
- if(msg.type==='stage')activity({transcribing:'Transcribing…',thinking:$('reasoning').checked?'Checking the question carefully…':'Thinking…',speaking:'Preparing voice…'}[msg.stage]||'Working…');
+ if(msg.type==='stage')activity({transcribing:'Transcribing…',thinking:Number($('reasoning').value)>=2?'Checking the question carefully…':'Thinking…',speaking:'Preparing voice…'}[msg.stage]||'Working…');
  if(msg.type==='progress')showProgress(msg.message||msg.stage);
  if(msg.type==='agent_actions')renderActions(msg.actions||[]);
  if(msg.type==='transcript'&&!userAdded&&msg.text){history.push({role:'user',content:msg.text});renderMessage('user',msg.text);userAdded=true;save();}

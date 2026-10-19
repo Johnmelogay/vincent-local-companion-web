@@ -1,0 +1,18 @@
+body{height:100dvh;padding-top:env(safe-area-inset-top)}
+.composer-wrap{padding-bottom:max(12px,env(safe-area-inset-bottom))}
+.brand-icon img{width:28px;height:32px;object-fit:contain;display:block}
+.welcome .welcome-mark{height:125px;width:105px;margin:0 auto 16px;background:none;border:0;box-shadow:none}
+.welcome-mark img{width:100%;height:100%;object-fit:contain;filter:drop-shadow(0 5px 6px #282d2712)}
+.message-label{display:flex;gap:8px;align-items:center}
+.message-portrait{height:29px;width:24px;object-fit:contain}
+.reasoning-control{display:flex;align-items:center;gap:7px;font-size:11px;color:#5e6657;white-space:nowrap}
+.reasoning-control input[type=range]{width:82px;accent-color:#71835d;cursor:pointer}
+.reasoning-control output{min-width:44px;font-size:10px;font-weight:600}
+.reasoning-control button{border:0;background:none;font-size:10px;color:#71835d;cursor:pointer;padding:4px}
+.install-note{border:1px solid #dedfd5;border-radius:10px;padding:12px;background:#f4f0e7;font-size:13px;line-height:1.6}
+body[data-vincent-state=thinking] .welcome-mark img{animation:character-think 3s ease-in-out infinite}
+body[data-vincent-state=speaking] .welcome-mark img{animation:character-talk .7s ease-in-out infinite}
+@keyframes character-think{50%{transform:translateY(-3px) rotate(-2deg)}}
+@keyframes character-talk{50%{transform:translateY(-2px) rotate(1deg)}}
+@media(max-width:600px){.composer-toolbar>div:first-child{gap:6px;flex-wrap:wrap}.reasoning-control{gap:4px}.reasoning-control input[type=range]{width:67px}.reasoning-control button{font-size:9px}.composer-toolbar{align-items:flex-end}}
+@media(prefers-reduced-motion:reduce){.welcome-mark img{animation:none!important}}

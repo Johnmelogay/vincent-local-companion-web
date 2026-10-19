@@ -26,3 +26,7 @@ can export it. The private pairing key is never published to this repository.
 Conversation text is stored in the visitor's browser. Uploaded files are extracted
 on the Mac; document excerpts are passed to the local model for answers. Requests
 travel through Cloudflare's HTTPS tunnel. There is no external model API.
+# Owner agent workflows
+
+Paired owner sessions can prepare file and terminal tasks and review exact proposed actions. “Approve workspace task” allows confined continuation for that task; machine actions always receive separate review. Activity shows real tool events, outputs and checks. Machine capabilities are managed in the desktop app. Public visitors cannot use owner tools or see personal context.
+

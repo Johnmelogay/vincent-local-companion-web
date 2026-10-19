@@ -4,7 +4,7 @@ const STORAGE='vincent-web-chat-v1';
 let ownerToken=localStorage.getItem('vincent-owner-key')||'';
 const pairing=new URLSearchParams(location.hash.slice(1)).get('owner');
 if(pairing){ownerToken=pairing;localStorage.setItem('vincent-owner-key',ownerToken);window.history.replaceState(null,'',location.pathname);}
-let archiveBefore=null,archiveLoading=false,taskRunning=false;
+let archiveBefore=null,archiveLoading=false,taskRunning=false,taskReviewOpen=false;
 const storageKey=()=>ownerToken?'vincent-owner-history-cache':STORAGE;
 const DISCOVERY='https://raw.githubusercontent.com/Johnmelogay/vincent-local-companion-web/main/runtime.json';
 let api='',socket=null,busy=false,attachments=[],history=[],mic=null,capture=null,processor=null;
@@ -33,7 +33,7 @@ async function discover(){
 }
 discover();setInterval(discover,30000);
 async function syncOwnerHistory(older=false){
- if(!ownerToken||!api||archiveLoading||busy)return;
+ if(!ownerToken||!api||archiveLoading||busy||taskRunning||taskReviewOpen)return;
  archiveLoading=true;
  try{
   const path=api+'/api/history?limit=200'+(older&&archiveBefore?'&before='+archiveBefore:'');
@@ -42,7 +42,7 @@ async function syncOwnerHistory(older=false){
   const messages=data.messages.map(m=>({role:m.role,content:m.content}));
   history=older?[...messages,...history]:messages;
   if(data.messages.length)archiveBefore=data.messages[0].id;
-  $('messages').replaceChildren();history.forEach(m=>renderMessage(m.role,m.content));save();
+  $('messages').replaceChildren();history.forEach(m=>renderMessage(m.role,m.content));if(taskPanel)$('messages').append(taskPanel);save();
   $('older-history').hidden=!data.has_more;
   $('personal-history-status').textContent=`Personal history connected · ${data.total} messages saved on your Mac. Desktop and web share this history.`;
   $('export-history').hidden=false;$('disconnect-history').hidden=false;
@@ -57,7 +57,7 @@ $('export-history').onclick=async()=>{
 $('disconnect-history').onclick=()=>{localStorage.removeItem('vincent-owner-key');localStorage.removeItem('vincent-owner-history-cache');location.reload();};
 setInterval(()=>{if(ownerToken&&!busy)syncOwnerHistory();},15000);
 function stopAudio(){audioEpoch++;for(const source of sources){try{source.stop();}catch{}}sources.clear();playAt=0;decode=Promise.resolve();}
-function stop(){if(socket){socket.close();socket=null;}stopAudio();busy=false;if(taskRunning&&ownerToken&&api)fetch(api+'/api/agent/stop',{method:'POST',headers:{Authorization:'Bearer '+ownerToken}}).catch(()=>{});taskRunning=false;activity(mic?'Listening…':'');}
+function stop(){if(socket){socket.close();socket=null;}stopAudio();busy=false;if((taskRunning||taskReviewOpen)&&ownerToken&&api)fetch(api+'/api/agent/stop',{method:'POST',headers:{Authorization:'Bearer '+ownerToken}}).catch(()=>{});taskRunning=false;taskReviewOpen=false;activity(mic?'Listening…':'');}
 function audio(data){const epoch=audioEpoch;decode=decode.then(async()=>{if(epoch!==audioEpoch)return;if(!audioContext)audioContext=new AudioContext({sampleRate:24000});await audioContext.resume();const bytes=Uint8Array.from(atob(data),c=>c.charCodeAt(0));const buffer=await audioContext.decodeAudioData(bytes.buffer);if(epoch!==audioEpoch)return;const source=audioContext.createBufferSource();source.buffer=buffer;source.connect(audioContext.destination);source.onended=()=>{sources.delete(source);if(!sources.size&&!busy)activity(mic?'Listening…':'');};playAt=Math.max(playAt,audioContext.currentTime+.18);sources.add(source);source.start(playAt);playAt+=buffer.duration;}).catch(()=>activity('Audio could not play. Tap Voice replies and try again.'));}
 function documentContext(query){
  const words=new Set(query.toLowerCase().match(/\w{3,}/g)||[]);let chunks=[];
@@ -90,9 +90,10 @@ function showProgress(text){
  const line=document.createElement('p');line.textContent=text;taskPanel.append(line);while(taskPanel.children.length>60)taskPanel.children[1].remove();
 }
 function renderActions(actions){
+ if(actions.length)taskReviewOpen=true;
  for(const action of actions){const card=document.createElement('article');card.className='message assistant';const title=document.createElement('strong');title.textContent=action.tool.replaceAll('_',' ')+' '+(action.path||'')+(action.scope==='machine'?' · MACHINE ACCESS':' · workspace');const preview=document.createElement('pre');preview.textContent=action.command||action.content||action.path||'';const status=document.createElement('p');const yes=document.createElement('button'),no=document.createElement('button');yes.textContent='Approve';no.textContent='Reject';
  const automatic=document.createElement('button');automatic.textContent='Approve workspace task';automatic.hidden=action.scope!=='workspace';
- const decide=async(approve,approveTask=false)=>{yes.disabled=no.disabled=automatic.disabled=true;taskRunning=approve;activity(approve?'Running and checking…':'Cancelling…');status.textContent=approve?'Running and checking…':'Cancelling…';try{const response=await fetch(api+'/api/agent/actions/'+encodeURIComponent(action.id),{method:'POST',headers:{Authorization:'Bearer '+ownerToken,'Content-Type':'application/json'},body:JSON.stringify({approve,approve_task:approveTask})});const result=await response.json();if(!response.ok){if(response.status===409||result.detail?.includes('displayed order'))yes.disabled=no.disabled=automatic.disabled=false;throw Error(result.detail||'Action failed.');}status.textContent=JSON.stringify(result,null,2);if(result.actions?.length)renderActions(result.actions);}catch(error){status.textContent=error.message;}finally{taskRunning=false;activity(status.textContent.includes('failed')?'Task needs attention.':'Review task results in Activity.');}};
+ const decide=async(approve,approveTask=false)=>{yes.disabled=no.disabled=automatic.disabled=true;taskRunning=approve;activity(approve?'Running and checking…':'Cancelling…');status.textContent=approve?'Running and checking…':'Cancelling…';try{const response=await fetch(api+'/api/agent/actions/'+encodeURIComponent(action.id),{method:'POST',headers:{Authorization:'Bearer '+ownerToken,'Content-Type':'application/json'},body:JSON.stringify({approve,approve_task:approveTask})});const result=await response.json();if(!response.ok){if(response.status===409||result.detail?.includes('displayed order'))yes.disabled=no.disabled=automatic.disabled=false;throw Error(result.detail||'Action failed.');}status.textContent=JSON.stringify(result,null,2);taskReviewOpen=result.task_state==='awaiting_approval';if(result.actions?.length)renderActions(result.actions);}catch(error){status.textContent=error.message;}finally{taskRunning=false;activity(status.textContent.includes('failed')?'Task needs attention.':'Review task results in Activity.');}};
  yes.onclick=()=>decide(true);no.onclick=()=>decide(false);automatic.onclick=()=>decide(true,true);card.append(title,preview,yes,no,automatic,status);$('messages').append(card);}
 }
 setInterval(async()=>{if(!ownerToken||!api||document.hidden)return;try{const response=await fetch(api+'/api/agent/events?after='+taskCursor,{headers:{Authorization:'Bearer '+ownerToken}});if(!response.ok)return;const data=await response.json();for(const event of data.events){taskCursor=Math.max(taskCursor,event.id);showProgress(event.stage+' · '+(event.detail.message||JSON.stringify(event.detail.result||event.detail)));if(event.stage==='review')activity('Waiting for your review below');else if(['complete','failed','cancelled','paused','interrupted'].includes(event.stage))activity(event.detail.message);else activity(event.detail.message||'Working on your task…');}}catch{}},2000);
